@@ -1882,6 +1882,31 @@ fn package_unpack_dir_bundle_and_original_lock_check() {
         String::from_utf8_lossy(&nested.stderr)
     );
 
+    // The same guard must hold when --dest reaches the bundle through a
+    // different spelling of the path (a symlink here; on Windows the
+    // `\\?\` verbatim prefix `canonicalize` adds) and does not exist yet.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(tmp.join("d"), tmp.join("link")).unwrap();
+        let aliased = sdkt_in(
+            &tmp,
+            &[
+                "package",
+                "unpack",
+                "d/m38-app-0.3.0",
+                "--dest",
+                "link/m38-app-0.3.0/y/z",
+            ],
+        );
+        assert!(!aliased.status.success());
+        assert!(
+            String::from_utf8_lossy(&aliased.stderr).contains("must not be the bundle directory"),
+            "{}",
+            String::from_utf8_lossy(&aliased.stderr)
+        );
+        assert!(!tmp.join("d/m38-app-0.3.0/y").exists(), "nothing written");
+    }
+
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(&src);
 }

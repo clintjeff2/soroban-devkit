@@ -2005,15 +2005,9 @@ fn check_unpack_paths(artifact: &Path, dest: &Path, force: bool) -> Result<(), S
             "{} is not a bundle directory (no package.json descriptor)",
             artifact.display()
         ));
-    } else if let (Ok(src), Ok(cwd)) = (artifact.canonicalize(), std::env::current_dir()) {
+    } else if let Ok(src) = artifact.canonicalize() {
         // Copying a directory bundle into itself would recurse forever.
-        let dst = if dest.is_absolute() {
-            dest.to_path_buf()
-        } else {
-            cwd.join(dest)
-        };
-        let dst = dst.canonicalize().unwrap_or(dst);
-        if dst.starts_with(&src) {
+        if canonicalize_lenient(dest).starts_with(&src) {
             return Err(format!(
                 "--dest {} must not be the bundle directory or inside it",
                 dest.display()
@@ -2040,6 +2034,34 @@ fn check_unpack_paths(artifact: &Path, dest: &Path, force: bool) -> Result<(), S
         }
     }
     Ok(())
+}
+
+/// Canonicalize `path` even when it (or a trailing part of it) does not exist
+/// yet: the longest existing ancestor is canonicalized and the rest appended.
+/// This keeps both sides of a `starts_with` comparison in the same form, which
+/// matters on Windows where `canonicalize` yields `\\?\C:\...` paths.
+fn canonicalize_lenient(path: &Path) -> std::path::PathBuf {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut rest = Vec::new();
+    let mut cur = abs.as_path();
+    loop {
+        if let Ok(canon) = cur.canonicalize() {
+            return rest.iter().rev().fold(canon, |acc, part| acc.join(part));
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                cur = parent;
+            }
+            _ => return abs,
+        }
+    }
 }
 
 /// Run the bundle equivalence check, exiting on hard I/O errors (a missing
@@ -2176,6 +2198,8 @@ fn report_bundle(
         std::process::exit(1);
     }
     println!("Bundle verified: lock and dependency integrity match the packed bundle.");
+}
+
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
